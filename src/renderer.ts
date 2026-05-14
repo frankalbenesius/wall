@@ -125,22 +125,14 @@ export function renderScene(
     const base = palette.colors[colorIndex % palette.colors.length];
     const leftColor = darkenHex(base, palette.leftDarken);
     const rightColor = darkenHex(base, palette.rightDarken);
-    const foundL = darkenHex(base, palette.leftDarken * 0.55);
-    const foundR = darkenHex(base, palette.rightDarken * 0.55);
     const oc = palette.outlineColor;
 
-    const zB = baseZ;
+    // baseZ folds into total height — all blocks start at z=0 so no boundary
+    // artifacts from mismatched pedestal faces at adjacent block edges.
     const zT = baseZ + height;
 
-    // Foundation columns (the "pedestal" from z=0 up to baseZ)
-    if (baseZ > 0) {
-      face(ctx, [p(gx0, gy1, 0, layout), p(gx1, gy1, 0, layout), p(gx1, gy1, zB, layout), p(gx0, gy1, zB, layout)], foundL, oc, sw);
-      face(ctx, [p(gx1, gy0, 0, layout), p(gx1, gy1, 0, layout), p(gx1, gy1, zB, layout), p(gx1, gy0, zB, layout)], foundR, oc, sw);
-    }
-
-    // Block faces
-    face(ctx, [p(gx0, gy1, zB, layout), p(gx1, gy1, zB, layout), p(gx1, gy1, zT, layout), p(gx0, gy1, zT, layout)], leftColor, oc, sw);
-    face(ctx, [p(gx1, gy0, zB, layout), p(gx1, gy1, zB, layout), p(gx1, gy1, zT, layout), p(gx1, gy0, zT, layout)], rightColor, oc, sw);
+    face(ctx, [p(gx0, gy1, 0, layout), p(gx1, gy1, 0, layout), p(gx1, gy1, zT, layout), p(gx0, gy1, zT, layout)], leftColor, oc, sw);
+    face(ctx, [p(gx1, gy0, 0, layout), p(gx1, gy1, 0, layout), p(gx1, gy1, zT, layout), p(gx1, gy0, zT, layout)], rightColor, oc, sw);
     face(ctx, [p(gx0, gy0, zT, layout), p(gx1, gy0, zT, layout), p(gx1, gy1, zT, layout), p(gx0, gy1, zT, layout)], base, oc, sw);
   }
 }
