@@ -6,6 +6,7 @@ export interface Block {
   w: number;
   h: number;
   height: number;
+  baseZ: number;
   colorIndex: number;
 }
 
@@ -34,17 +35,19 @@ export interface GeneratorOptions {
   gridN: number;
   maxDepth: number;
   maxHeight: number;
+  heightFreq: number;
+  baseZAmplitude: number;
+  baseZFreq: number;
+  colorFreq: number;
   paletteSize: number;
-  noiseFreqHeight: number;
-  noiseFreqColor: number;
 }
 
 export function generateBlocks(opts: GeneratorOptions): Block[] {
-  const { seed, gridN, maxDepth, maxHeight, paletteSize, noiseFreqHeight, noiseFreqColor } = opts;
+  const { seed, gridN, maxDepth, maxHeight, heightFreq, baseZAmplitude, baseZFreq, colorFreq, paletteSize } = opts;
   const base = fnv1a(seed);
 
-  // Two noise fields + one RNG, all seeded from the input
   const heightNoise = createNoise2D(mulberry32(base));
+  const baseZNoise = createNoise2D(mulberry32(base ^ 0x12345678));
   const colorNoise = createNoise2D(mulberry32(base ^ 0xdeadbeef));
   const rng = mulberry32(base ^ 0xcafebabe);
 
@@ -59,11 +62,17 @@ export function generateBlocks(opts: GeneratorOptions): Block[] {
     if (depth === 0 || (!canSplitW && !canSplitH) || rng() > splitChance) {
       const cx = (x + w * 0.5) / gridN;
       const cy = (y + h * 0.5) / gridN;
-      const nv = heightNoise(cx * noiseFreqHeight, cy * noiseFreqHeight);
-      const height = Math.max(1, Math.round(((nv + 1) / 2) * maxHeight));
-      const cv = colorNoise(cx * noiseFreqColor, cy * noiseFreqColor);
+
+      const hn = heightNoise(cx * heightFreq, cy * heightFreq);
+      const height = Math.max(1, Math.round(((hn + 1) / 2) * maxHeight));
+
+      const bn = baseZNoise(cx * baseZFreq, cy * baseZFreq);
+      const baseZ = baseZAmplitude > 0 ? Math.round(((bn + 1) / 2) * baseZAmplitude) : 0;
+
+      const cv = colorNoise(cx * colorFreq, cy * colorFreq);
       const colorIndex = Math.abs(Math.floor(((cv + 1) / 2) * paletteSize)) % paletteSize;
-      blocks.push({ x, y, w, h, height, colorIndex });
+
+      blocks.push({ x, y, w, h, height, baseZ, colorIndex });
       return;
     }
 
