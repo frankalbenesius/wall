@@ -9,10 +9,14 @@ interface Params {
   seed: string;
   paletteIdx: number;
   depth: number;
+  minSize: number;
+  maxSize: number;
+  splitChance: number;
+  splitJitter: number;
   maxHeight: number;
   heightFreq: number;
-  baseZAmplitude: number;
-  baseZFreq: number;
+  liftAmplitude: number;
+  liftFreq: number;
   colorFreq: number;
   platformScale: number;
   gap: number;
@@ -25,10 +29,14 @@ const DEFAULTS: Params = {
   seed: 'wallpaper',
   paletteIdx: 0,
   depth: 5,
+  minSize: 5,
+  maxSize: 20,
+  splitChance: 0.85,
+  splitJitter: 0.34,
   maxHeight: 5,
   heightFreq: 3,
-  baseZAmplitude: 0,
-  baseZFreq: 2,
+  liftAmplitude: 0,
+  liftFreq: 2,
   colorFreq: 5,
   platformScale: 0.82,
   gap: 0.2,
@@ -51,10 +59,14 @@ function buildGenOpts(p: Params) {
     seed: p.seed,
     gridN: GRID_N,
     maxDepth: p.depth,
+    minSize: p.minSize,
+    maxSize: p.maxSize,
+    splitChance: p.splitChance,
+    splitJitter: p.splitJitter,
     maxHeight: p.maxHeight,
     heightFreq: p.heightFreq,
-    baseZAmplitude: p.baseZAmplitude,
-    baseZFreq: p.baseZFreq,
+    liftAmplitude: p.liftAmplitude,
+    liftFreq: p.liftFreq,
     colorFreq: p.colorFreq,
     paletteSize: PALETTES[p.paletteIdx].colors.length,
   };
@@ -67,8 +79,11 @@ function buildRenderOpts(p: Params, w: number, h: number): RenderOptions {
     canvasHeight: h,
     platformScale: p.platformScale,
     blockDepthFactor: 0.42,
-    // Stable upper bound so origin doesn't shift as params change
-    maxZ: p.maxHeight + p.baseZAmplitude + 2,
+    // Stable z-range bounds so the platform doesn't jump as params change.
+    // centerZ = maxHeight/2 + noise * liftAmp, so worst case top is
+    // maxHeight + liftAmp and worst case bottom is -liftAmp.
+    maxZ: p.maxHeight + p.liftAmplitude,
+    minZ: -p.liftAmplitude,
     gap: p.gap,
     gapJitter: p.gapJitter,
     strokeWidth: p.strokeWidth,
@@ -257,6 +272,18 @@ export default function App() {
             <Row label="depth">
               <Slider value={params.depth} min={2} max={7} step={1} onChange={set('depth')} />
             </Row>
+            <Row label="min size">
+              <Slider value={params.minSize} min={2} max={15} step={1} onChange={set('minSize')} />
+            </Row>
+            <Row label="max size">
+              <Slider value={params.maxSize} min={4} max={GRID_N} step={1} onChange={set('maxSize')} />
+            </Row>
+            <Row label="split chance">
+              <Slider value={params.splitChance} min={0.3} max={1} onChange={set('splitChance')} />
+            </Row>
+            <Row label="split jitter">
+              <Slider value={params.splitJitter} min={0} max={0.9} onChange={set('splitJitter')} />
+            </Row>
             <Row label="field size">
               <Slider value={params.platformScale} min={0.3} max={1.1} onChange={set('platformScale')} />
             </Row>
@@ -276,11 +303,11 @@ export default function App() {
             <Row label="height freq">
               <Slider value={params.heightFreq} min={0.5} max={10} onChange={set('heightFreq')} />
             </Row>
-            <Row label="base Z amp">
-              <Slider value={params.baseZAmplitude} min={0} max={8} step={0.5} onChange={set('baseZAmplitude')} />
+            <Row label="lift amp">
+              <Slider value={params.liftAmplitude} min={0} max={8} step={0.5} onChange={set('liftAmplitude')} />
             </Row>
-            <Row label="base Z freq">
-              <Slider value={params.baseZFreq} min={0.5} max={8} onChange={set('baseZFreq')} />
+            <Row label="lift freq">
+              <Slider value={params.liftFreq} min={0.5} max={8} onChange={set('liftFreq')} />
             </Row>
             <Row label="color freq">
               <Slider value={params.colorFreq} min={0.5} max={12} onChange={set('colorFreq')} />

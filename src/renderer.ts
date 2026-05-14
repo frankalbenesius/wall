@@ -8,9 +8,10 @@ export interface RenderOptions {
   canvasHeight: number;
   platformScale: number;
   blockDepthFactor: number;
-  // Fixed max Z for layout — must stay constant as params change so platform
-  // position doesn't jump. Set to maxHeight + maxBaseZAmplitude + buffer.
-  maxZ: number;
+  // Stable z-range bounds for layout — must stay constant as noise/seed
+  // params change so the platform doesn't jump on slider drag.
+  maxZ: number;        // worst-case top of any block
+  minZ: number;        // worst-case bottom; negative when boxes dip below floor
   gap: number;         // shrink per block in grid units (0 = flush)
   gapJitter: number;   // 0-1 fraction of gap to randomize per block
   strokeWidth: number; // outline as fraction of tileW (0 = no outline)
@@ -26,15 +27,16 @@ interface Layout {
 }
 
 function computeLayout(opts: RenderOptions): Layout {
-  const { gridN, canvasWidth, canvasHeight, platformScale, blockDepthFactor, maxZ } = opts;
+  const { gridN, canvasWidth, canvasHeight, platformScale, blockDepthFactor, maxZ, minZ } = opts;
   const tileW = (canvasWidth * platformScale) / gridN;
   const tileH = tileW / 2;
   const blockDepth = tileW * blockDepthFactor;
-  const zHeadroom = blockDepth * (maxZ + 2);
+  const zHeadroomTop = blockDepth * (maxZ + 2);
+  const zHeadroomBottom = minZ < 0 ? blockDepth * (-minZ + 2) : 0;
   const diamondH = gridN * tileH;
-  const totalH = diamondH + zHeadroom;
+  const totalH = diamondH + zHeadroomTop + zHeadroomBottom;
   const originX = canvasWidth / 2;
-  const originY = (canvasHeight - totalH) / 2 + zHeadroom;
+  const originY = (canvasHeight - totalH) / 2 + zHeadroomTop;
   return { tileW, tileH, blockDepth, originX, originY };
 }
 
@@ -72,22 +74,54 @@ function face(
   }
 }
 
-// Correct sort for guillotine-partitioned axis-aligned blocks.
-// Two blocks from a guillotine cut are always separated on at least one axis.
-// We determine render order directly from that separation rather than using
-// the x+y heuristic, which breaks down when block heights differ significantly.
-function compareBlocks(a: Block, b: Block): number {
-  const aLeftOfB = a.x + a.w <= b.x;
-  const bLeftOfA = b.x + b.w <= a.x;
+// Pairwise depth order for two non-overlapping axis-aligned footprints in
+// this iso projection. Returns -1 if a must draw before b, 1 if after, 0 if
+// unconstrained (truly diagonal — no on-screen overlap is possible).
+function depthOrder(a: Block, b: Block): -1 | 0 | 1 {
+  const aLeftB = a.x + a.w <= b.x;
+  const bLeftA = b.x + b.w <= a.x;
   const aAboveB = a.y + a.h <= b.y;
   const bAboveA = b.y + b.h <= a.y;
+  const xSep = aLeftB || bLeftA;
+  const ySep = aAboveB || bAboveA;
 
-  // A is clearly behind B (A ends before B starts on both-or-one axis)
-  if ((aLeftOfB || aAboveB) && !bLeftOfA && !bAboveA) return -1;
-  // B is clearly behind A
-  if ((bLeftOfA || bAboveA) && !aLeftOfB && !aAboveB) return 1;
-  // Diagonal adjacency (shared corner only) — x+y is fine here
-  return (a.x + a.y) - (b.x + b.y);
+  // Overlap on one axis, separated on the other → separated axis decides.
+  if (xSep && !ySep) return aLeftB ? -1 : 1;
+  if (ySep && !xSep) return aAboveB ? -1 : 1;
+  // Separated on both axes → diagonal. Only the "agreeing" diagonals are
+  // unambiguous; conflicting diagonals never overlap on screen so leave free.
+  if (xSep && ySep) {
+    if (aLeftB && aAboveB) return -1;
+    if (bLeftA && bAboveA) return 1;
+  }
+  return 0;
+}
+
+// Painter's order via topological sort. A comparator-based Array.sort isn't
+// safe here: the depth relation is a partial order, and JS sort can split a
+// transitive chain when some pairs return 0, producing wrong stacking.
+function painterSort(blocks: Block[]): Block[] {
+  const n = blocks.length;
+  const succ: number[][] = Array.from({ length: n }, () => []);
+  const inDeg = new Array<number>(n).fill(0);
+
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const o = depthOrder(blocks[i], blocks[j]);
+      if (o < 0) { succ[i].push(j); inDeg[j]++; }
+      else if (o > 0) { succ[j].push(i); inDeg[i]++; }
+    }
+  }
+
+  const result: Block[] = [];
+  const queue: number[] = [];
+  for (let i = 0; i < n; i++) if (inDeg[i] === 0) queue.push(i);
+  while (queue.length) {
+    const i = queue.shift()!;
+    result.push(blocks[i]);
+    for (const j of succ[i]) if (--inDeg[j] === 0) queue.push(j);
+  }
+  return result;
 }
 
 export function renderScene(
@@ -105,7 +139,7 @@ export function renderScene(
   ctx.fillStyle = palette.bgColor;
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-  const sorted = [...blocks].sort(compareBlocks);
+  const sorted = painterSort(blocks);
 
   for (const block of sorted) {
     const { x, y, w, h, height, baseZ, colorIndex } = block;
@@ -127,12 +161,14 @@ export function renderScene(
     const rightColor = darkenHex(base, palette.rightDarken);
     const oc = palette.outlineColor;
 
-    // baseZ folds into total height — all blocks start at z=0 so no boundary
-    // artifacts from mismatched pedestal faces at adjacent block edges.
+    // Side faces span the box's actual vertical extent. Bottom face is
+    // always invisible in this isometric projection (faces away from camera),
+    // so we don't draw it even when boxes float clear of the floor.
+    const zB = baseZ;
     const zT = baseZ + height;
 
-    face(ctx, [p(gx0, gy1, 0, layout), p(gx1, gy1, 0, layout), p(gx1, gy1, zT, layout), p(gx0, gy1, zT, layout)], leftColor, oc, sw);
-    face(ctx, [p(gx1, gy0, 0, layout), p(gx1, gy1, 0, layout), p(gx1, gy1, zT, layout), p(gx1, gy0, zT, layout)], rightColor, oc, sw);
+    face(ctx, [p(gx0, gy1, zB, layout), p(gx1, gy1, zB, layout), p(gx1, gy1, zT, layout), p(gx0, gy1, zT, layout)], leftColor, oc, sw);
+    face(ctx, [p(gx1, gy0, zB, layout), p(gx1, gy1, zB, layout), p(gx1, gy1, zT, layout), p(gx1, gy0, zT, layout)], rightColor, oc, sw);
     face(ctx, [p(gx0, gy0, zT, layout), p(gx1, gy0, zT, layout), p(gx1, gy1, zT, layout), p(gx0, gy1, zT, layout)], base, oc, sw);
   }
 }
