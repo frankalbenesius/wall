@@ -2,10 +2,11 @@ import { useState, useRef, useEffect, useCallback, ReactNode } from 'react';
 import { generateBlocks } from './generator';
 import { renderScene, type RenderOptions } from './renderer';
 import { PALETTES } from './colors';
+import { encodeParams, decodeParams } from './urlState';
 
 // ── types ────────────────────────────────────────────────────────────────────
 
-interface Params {
+export interface Params {
   seed: string;
   paletteIdx: number;
   depth: number;
@@ -23,6 +24,7 @@ interface Params {
   gapJitter: number;
   strokeWidth: number;
   strokeJitter: number;
+  strokeWobble: number;
 }
 
 const DEFAULTS: Params = {
@@ -35,14 +37,15 @@ const DEFAULTS: Params = {
   splitJitter: 0.34,
   maxHeight: 5,
   heightFreq: 3,
-  liftAmplitude: 0,
+  liftAmplitude: 1.5,
   liftFreq: 2,
   colorFreq: 5,
-  platformScale: 0.82,
+  platformScale: 0.6,
   gap: 0.2,
   gapJitter: 0.3,
-  strokeWidth: 0.06,
-  strokeJitter: 0.4,
+  strokeWidth: 0.1,
+  strokeJitter: 0.05,
+  strokeWobble: 0.3,
 };
 
 const GRID_N = 60;
@@ -50,7 +53,6 @@ const PREVIEW_W = 1200;
 const PREVIEW_H = 750;
 const EXPORT_W = 3840;
 const EXPORT_H = 2400;
-const MAX_HISTORY = 30;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -88,11 +90,36 @@ function buildRenderOpts(p: Params, w: number, h: number): RenderOptions {
     gapJitter: p.gapJitter,
     strokeWidth: p.strokeWidth,
     strokeJitter: p.strokeJitter,
+    strokeWobble: p.strokeWobble,
   };
 }
 
 function randomSeed() {
   return Math.random().toString(36).slice(2, 9);
+}
+
+function chaosParams(): Params {
+  const r = Math.random;
+  return {
+    seed: randomSeed(),
+    paletteIdx: Math.floor(r() * PALETTES.length),
+    depth: 2 + Math.floor(r() * 6),
+    minSize: 2 + Math.floor(r() * 14),
+    maxSize: 4 + Math.floor(r() * (GRID_N - 4)),
+    splitChance: 0.3 + r() * 0.7,
+    splitJitter: r() * 0.9,
+    maxHeight: 1 + Math.floor(r() * 10),
+    heightFreq: 0.5 + r() * 9.5,
+    liftAmplitude: r() * 8,
+    liftFreq: 0.5 + r() * 7.5,
+    colorFreq: 0.5 + r() * 11.5,
+    platformScale: 0.5 + r() * 0.6,
+    gap: r() * 2,
+    gapJitter: r(),
+    strokeWidth: 0.02 + r() * 0.16,
+    strokeJitter: r(),
+    strokeWobble: r() * 0.7,
+  };
 }
 
 // ── sub-components ────────────────────────────────────────────────────────────
@@ -105,12 +132,12 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
         onClick={() => setOpen(o => !o)}
         style={{
           width: '100%', textAlign: 'left', background: 'none', border: 'none',
-          color: '#888', fontSize: 10, letterSpacing: 2, textTransform: 'uppercase',
-          padding: '8px 12px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between',
+          color: '#888', fontSize: 11, letterSpacing: 2,
+          padding: '10px 12px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}
       >
         {title}
-        <span style={{ color: '#555' }}>{open ? '▲' : '▼'}</span>
+        <span style={{ color: '#555', fontSize: 14 }}>{open ? '−' : '+'}</span>
       </button>
       {open && <div style={{ padding: '4px 12px 12px' }}>{children}</div>}
     </div>
@@ -145,28 +172,149 @@ function Slider({
   );
 }
 
+function Swatches({ colors, w = 10, h = 14 }: { colors: string[]; w?: number; h?: number }) {
+  return (
+    <div style={{ display: 'flex', flexShrink: 0 }}>
+      {colors.map((c, i) => (
+        <div key={i} style={{ width: w, height: h, background: c }} />
+      ))}
+    </div>
+  );
+}
+
+function PaletteDropdown({ value, onChange }: { value: number; onChange: (i: number) => void }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onClickOutside = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+        setQuery('');
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setOpen(false); setQuery(''); }
+    };
+    document.addEventListener('mousedown', onClickOutside);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClickOutside);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const current = PALETTES[value];
+  const q = query.trim().toLowerCase();
+  const filtered = PALETTES
+    .map((p, i) => ({ p, i }))
+    .filter(({ p }) => !q || p.name.toLowerCase().includes(q));
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          background: '#1a1a2a', border: '1px solid #333', color: '#ddd',
+          padding: '3px 6px', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11,
+          display: 'flex', alignItems: 'center', gap: 6, width: 160,
+        }}
+      >
+        <Swatches colors={current.colors} w={8} h={12} />
+        <span style={{ flex: 1, textAlign: 'left' }}>{current.name}</span>
+        <span style={{ fontSize: 10, color: '#888', lineHeight: 1 }}>▾</span>
+      </button>
+
+      {open && (
+        <div style={{
+          position: 'absolute', top: '100%', right: 0, marginTop: 4,
+          width: 240, background: '#0f0f18', border: '1px solid #333',
+          boxShadow: '0 6px 20px rgba(0,0,0,0.6)', zIndex: 100,
+        }}>
+          <input
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder="search palettes…"
+            autoFocus
+            style={{
+              width: '100%', boxSizing: 'border-box',
+              background: '#1a1a2a', color: '#ddd', border: 'none',
+              borderBottom: '1px solid #333', padding: '6px 8px',
+              fontFamily: 'inherit', fontSize: 11, outline: 'none',
+            }}
+          />
+          <div style={{ maxHeight: 320, overflowY: 'auto' }}>
+            {filtered.length === 0 ? (
+              <div style={{ padding: 12, color: '#555', fontSize: 11, textAlign: 'center' }}>
+                no matches
+              </div>
+            ) : filtered.map(({ p, i }) => (
+              <button
+                key={i}
+                onClick={() => { onChange(i); setOpen(false); setQuery(''); }}
+                style={{
+                  width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                  padding: '6px 8px', background: i === value ? '#1f1f2e' : 'transparent',
+                  border: 'none', borderBottom: '1px solid #1f1f2a',
+                  color: '#ccc', cursor: 'pointer', fontFamily: 'inherit', fontSize: 11,
+                  textAlign: 'left',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.background = '#1f1f2e'; }}
+                onMouseLeave={e => { e.currentTarget.style.background = i === value ? '#1f1f2e' : 'transparent'; }}
+              >
+                <Swatches colors={p.colors} w={12} h={16} />
+                <span style={{ flex: 1 }}>{p.name}</span>
+                {i === value && <span style={{ color: '#5b8dd9', fontSize: 10 }}>●</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── main component ────────────────────────────────────────────────────────────
 
+function initialParams(): Params {
+  if (typeof window === 'undefined') return DEFAULTS;
+  const v = new URLSearchParams(window.location.search).get('v');
+  if (v) {
+    const decoded = decodeParams(v);
+    if (decoded) return decoded;
+  }
+  return DEFAULTS;
+}
+
 export default function App() {
-  const [history, setHistory] = useState<Params[]>([DEFAULTS]);
-  const [histIdx, setHistIdx] = useState(0);
+  const [params, setParams] = useState<Params>(initialParams);
   const [panelOpen, setPanelOpen] = useState(true);
   const [exporting, setExporting] = useState(false);
+  const [shared, setShared] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const params = history[histIdx];
+  // On mount: clear the ?v=... token from the address bar so the default URL
+  // stays clean. State is already loaded from the token via initialParams().
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (new URLSearchParams(window.location.search).has('v')) {
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+  }, []);
+
+  const share = useCallback(() => {
+    const encoded = encodeParams(params);
+    const url = `${window.location.origin}${window.location.pathname}?v=${encoded}`;
+    void navigator.clipboard.writeText(url);
+    setShared(true);
+    window.setTimeout(() => setShared(false), 1800);
+  }, [params]);
 
   const push = useCallback((updates: Partial<Params>) => {
-    setHistory(prev => {
-      const next = { ...prev[histIdx], ...updates };
-      const trimmed = prev.slice(0, histIdx + 1);
-      return [...trimmed.slice(-MAX_HISTORY + 1), next];
-    });
-    setHistIdx(prev => Math.min(prev + 1, MAX_HISTORY - 1));
-  }, [histIdx]);
-
-  const undo = () => setHistIdx(i => Math.max(0, i - 1));
-  const redo = () => setHistIdx(i => Math.min(history.length - 1, i + 1));
+    setParams(prev => ({ ...prev, ...updates }));
+  }, []);
 
   const paint = useCallback((canvas: HTMLCanvasElement, w: number, h: number, p: Params) => {
     const ctx = canvas.getContext('2d');
@@ -222,24 +370,24 @@ export default function App() {
         onClick={() => setPanelOpen(o => !o)}
         style={{
           position: 'fixed', top: 12, right: panelOpen ? 284 : 12, zIndex: 10,
-          background: '#1a1a2a', border: '1px solid #333', color: '#888',
-          width: 28, height: 28, cursor: 'pointer', fontSize: 14,
+          background: '#1a1a2a', border: '1px solid #333', color: '#aaa',
+          width: 32, height: 32, cursor: 'pointer', fontSize: 20, lineHeight: 1,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}
         title={panelOpen ? 'hide controls' : 'show controls'}
       >
-        {panelOpen ? '→' : '←'}
+        {panelOpen ? '›' : '‹'}
       </button>
 
       {/* Control panel */}
       {panelOpen && (
         <div style={{
           width: 272, flexShrink: 0, background: '#0f0f18', borderLeft: '1px solid #222',
-          overflowY: 'auto', fontSize: 12, color: '#ccc',
+          overflowY: 'auto', overflowX: 'hidden', fontSize: 12, color: '#ccc',
         }}>
           {/* Header */}
           <div style={{ padding: '10px 12px 8px', borderBottom: '1px solid #2a2a3a', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontSize: 11, color: '#555', letterSpacing: 1 }}>WALLPAPER GEN</span>
+            <span style={{ fontSize: 11, color: '#555', letterSpacing: 2 }}>wall</span>
             <span style={{ color: '#444', fontSize: 10 }}>{PREVIEW_W}×{PREVIEW_H}</span>
           </div>
 
@@ -250,26 +398,52 @@ export default function App() {
                 <input
                   value={params.seed}
                   onChange={e => push({ seed: e.target.value })}
-                  style={{ background: '#1a1a2a', color: '#ddd', border: '1px solid #333', padding: '3px 6px', fontFamily: 'inherit', fontSize: 11, width: 100 }}
+                  style={{ background: '#1a1a2a', color: '#ddd', border: '1px solid #333', padding: '4px 6px', fontFamily: 'inherit', fontSize: 11, width: 90 }}
                 />
                 <button onClick={() => push({ seed: randomSeed() })}
-                  style={{ background: '#1a1a2a', border: '1px solid #333', color: '#888', padding: '3px 6px', cursor: 'pointer', fontSize: 12 }}>⟳</button>
+                  title="reroll seed"
+                  style={{ background: '#1a1a2a', border: '1px solid #333', color: '#aaa', padding: '0 8px', cursor: 'pointer', fontSize: 18, lineHeight: 1, minWidth: 28 }}>⟳</button>
               </div>
             </Row>
             <Row label="palette">
-              <select
+              <PaletteDropdown
                 value={params.paletteIdx}
-                onChange={e => push({ paletteIdx: Number(e.target.value) })}
-                style={{ background: '#1a1a2a', color: '#ddd', border: '1px solid #333', padding: '3px 6px', fontFamily: 'inherit', fontSize: 11 }}
-              >
-                {PALETTES.map((p, i) => <option key={i} value={i}>{p.name}</option>)}
-              </select>
+                onChange={i => push({ paletteIdx: i })}
+              />
             </Row>
+            <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+              <button
+                onClick={() => push(chaosParams())}
+                title="randomize every parameter"
+                style={{
+                  flex: 1, background: '#2a1a2a', color: '#e0c2e8',
+                  border: '1px solid #5a3a5a', padding: '8px', cursor: 'pointer',
+                  fontFamily: 'inherit', fontSize: 12, letterSpacing: 1,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                }}
+              >
+                <span style={{ fontSize: 16, lineHeight: 1 }}>🎲</span>
+                chaos
+              </button>
+              <button
+                onClick={() => push(DEFAULTS)}
+                title="reset to defaults"
+                style={{
+                  flex: 1, background: '#1a1a2a', color: '#bbb',
+                  border: '1px solid #3a3a4a', padding: '8px', cursor: 'pointer',
+                  fontFamily: 'inherit', fontSize: 12, letterSpacing: 1,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                }}
+              >
+                <span style={{ fontSize: 16, lineHeight: 1 }}>↺</span>
+                reset
+              </button>
+            </div>
           </Section>
 
-          {/* Layout */}
-          <Section title="layout">
-            <Row label="depth">
+          {/* Tiling — how the field is cut into rectangles */}
+          <Section title="tiling">
+            <Row label="max splits">
               <Slider value={params.depth} min={2} max={7} step={1} onChange={set('depth')} />
             </Row>
             <Row label="min size">
@@ -278,65 +452,57 @@ export default function App() {
             <Row label="max size">
               <Slider value={params.maxSize} min={4} max={GRID_N} step={1} onChange={set('maxSize')} />
             </Row>
-            <Row label="split chance">
+            <Row label="split %">
               <Slider value={params.splitChance} min={0.3} max={1} onChange={set('splitChance')} />
             </Row>
-            <Row label="split jitter">
+            <Row label="split Δ">
               <Slider value={params.splitJitter} min={0} max={0.9} onChange={set('splitJitter')} />
-            </Row>
-            <Row label="field size">
-              <Slider value={params.platformScale} min={0.3} max={1.1} onChange={set('platformScale')} />
-            </Row>
-            <Row label="gap">
-              <Slider value={params.gap} min={0} max={2} onChange={set('gap')} />
-            </Row>
-            <Row label="gap jitter">
-              <Slider value={params.gapJitter} min={0} max={1} onChange={set('gapJitter')} />
             </Row>
           </Section>
 
-          {/* Noise */}
-          <Section title="noise">
+          {/* Boxes — per-tile presentation: height + color */}
+          <Section title="boxes">
             <Row label="max height">
               <Slider value={params.maxHeight} min={1} max={10} step={1} onChange={set('maxHeight')} />
             </Row>
-            <Row label="height freq">
+            <Row label="height ƒ">
               <Slider value={params.heightFreq} min={0.5} max={10} onChange={set('heightFreq')} />
             </Row>
-            <Row label="lift amp">
-              <Slider value={params.liftAmplitude} min={0} max={8} step={0.5} onChange={set('liftAmplitude')} />
-            </Row>
-            <Row label="lift freq">
-              <Slider value={params.liftFreq} min={0.5} max={8} onChange={set('liftFreq')} />
-            </Row>
-            <Row label="color freq">
+            <Row label="color ƒ">
               <Slider value={params.colorFreq} min={0.5} max={12} onChange={set('colorFreq')} />
             </Row>
           </Section>
 
-          {/* Style */}
-          <Section title="style">
-            <Row label="stroke">
-              <Slider value={params.strokeWidth} min={0} max={0.2} onChange={set('strokeWidth')} />
+          {/* Field — where boxes sit: canvas fill, vertical lift, gaps */}
+          <Section title="field">
+            <Row label="field size">
+              <Slider value={params.platformScale} min={0.3} max={1.1} onChange={set('platformScale')} />
             </Row>
-            <Row label="stroke jitter">
-              <Slider value={params.strokeJitter} min={0} max={1} onChange={set('strokeJitter')} />
+            <Row label="lift amp">
+              <Slider value={params.liftAmplitude} min={0} max={8} step={0.5} onChange={set('liftAmplitude')} />
+            </Row>
+            <Row label="lift ƒ">
+              <Slider value={params.liftFreq} min={0.5} max={8} onChange={set('liftFreq')} />
+            </Row>
+            <Row label="gap">
+              <Slider value={params.gap} min={0} max={2} onChange={set('gap')} />
+            </Row>
+            <Row label="gap Δ">
+              <Slider value={params.gapJitter} min={0} max={1} onChange={set('gapJitter')} />
             </Row>
           </Section>
 
-          {/* History */}
-          <Section title="history">
-            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-              <button
-                onClick={undo} disabled={histIdx === 0}
-                style={{ flex: 1, background: '#1a1a2a', border: '1px solid #333', color: histIdx > 0 ? '#ccc' : '#444', padding: '5px', cursor: histIdx > 0 ? 'pointer' : 'default', fontFamily: 'inherit', fontSize: 11 }}
-              >← undo</button>
-              <span style={{ color: '#444', fontSize: 10 }}>{histIdx + 1}/{history.length}</span>
-              <button
-                onClick={redo} disabled={histIdx === history.length - 1}
-                style={{ flex: 1, background: '#1a1a2a', border: '1px solid #333', color: histIdx < history.length - 1 ? '#ccc' : '#444', padding: '5px', cursor: histIdx < history.length - 1 ? 'pointer' : 'default', fontFamily: 'inherit', fontSize: 11 }}
-              >redo →</button>
-            </div>
+          {/* Stroke — the lines around faces */}
+          <Section title="stroke">
+            <Row label="thickness">
+              <Slider value={params.strokeWidth} min={0} max={0.2} onChange={set('strokeWidth')} />
+            </Row>
+            <Row label="splotchy">
+              <Slider value={params.strokeJitter} min={0} max={1} onChange={set('strokeJitter')} />
+            </Row>
+            <Row label="wobble">
+              <Slider value={params.strokeWobble} min={0} max={1} onChange={set('strokeWobble')} />
+            </Row>
           </Section>
 
           {/* Export */}
@@ -345,11 +511,29 @@ export default function App() {
               onClick={download} disabled={exporting}
               style={{
                 width: '100%', background: exporting ? '#2a2a3a' : '#3060b0', color: '#fff',
-                border: 'none', padding: '8px', cursor: exporting ? 'default' : 'pointer',
-                fontFamily: 'inherit', fontSize: 11, letterSpacing: 1,
+                border: 'none', padding: '10px', cursor: exporting ? 'default' : 'pointer',
+                fontFamily: 'inherit', fontSize: 12, letterSpacing: 1,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
               }}
             >
-              {exporting ? 'rendering…' : `↓ download 4k  (${EXPORT_W}×${EXPORT_H})`}
+              {exporting
+                ? 'rendering…'
+                : <><span style={{ fontSize: 16, lineHeight: 1 }}>⬇</span> download 4k ({EXPORT_W}×{EXPORT_H})</>}
+            </button>
+            <button
+              onClick={share}
+              style={{
+                width: '100%', marginTop: 6, background: shared ? '#1a3a2a' : '#1a1a2a',
+                color: shared ? '#9be0b3' : '#bbb',
+                border: `1px solid ${shared ? '#3a6a4a' : '#3a3a4a'}`,
+                padding: '8px', cursor: 'pointer',
+                fontFamily: 'inherit', fontSize: 12, letterSpacing: 1,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                transition: 'background 0.2s, color 0.2s, border-color 0.2s',
+              }}
+            >
+              <span style={{ fontSize: 16, lineHeight: 1 }}>{shared ? '✓' : '🔗'}</span>
+              {shared ? 'copied to clipboard' : 'share link'}
             </button>
             <div style={{ color: '#444', fontSize: 10, marginTop: 6, textAlign: 'center' }}>
               fits MacBook Pro 16" native
