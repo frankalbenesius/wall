@@ -8,6 +8,9 @@ export interface RenderOptions {
   canvasHeight: number;
   platformScale: number;
   blockDepthFactor: number;
+  // Fixed max Z for layout — must stay constant as params change so platform
+  // position doesn't jump. Set to maxHeight + maxBaseZAmplitude + buffer.
+  maxZ: number;
   gap: number;         // shrink per block in grid units (0 = flush)
   gapJitter: number;   // 0-1 fraction of gap to randomize per block
   strokeWidth: number; // outline as fraction of tileW (0 = no outline)
@@ -22,8 +25,8 @@ interface Layout {
   originY: number;
 }
 
-function computeLayout(opts: RenderOptions, maxZ: number): Layout {
-  const { gridN, canvasWidth, canvasHeight, platformScale, blockDepthFactor } = opts;
+function computeLayout(opts: RenderOptions): Layout {
+  const { gridN, canvasWidth, canvasHeight, platformScale, blockDepthFactor, maxZ } = opts;
   const tileW = (canvasWidth * platformScale) / gridN;
   const tileH = tileW / 2;
   const blockDepth = tileW * blockDepthFactor;
@@ -95,8 +98,7 @@ export function renderScene(
 ): void {
   const { canvasWidth, canvasHeight, gap, gapJitter, strokeWidth, strokeJitter } = opts;
 
-  const maxZ = blocks.reduce((m, b) => Math.max(m, b.baseZ + b.height), 1);
-  const layout = computeLayout(opts, maxZ);
+  const layout = computeLayout(opts);
   const { tileW } = layout;
   const baseStroke = tileW * strokeWidth;
 

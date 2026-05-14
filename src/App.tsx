@@ -67,6 +67,8 @@ function buildRenderOpts(p: Params, w: number, h: number): RenderOptions {
     canvasHeight: h,
     platformScale: p.platformScale,
     blockDepthFactor: 0.42,
+    // Stable upper bound so origin doesn't shift as params change
+    maxZ: p.maxHeight + p.baseZAmplitude + 2,
     gap: p.gap,
     gapJitter: p.gapJitter,
     strokeWidth: p.strokeWidth,
